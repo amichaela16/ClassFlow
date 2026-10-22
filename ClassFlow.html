@@ -108,9 +108,10 @@
         var PASSING = 60;            // passing percentage
         var currentUser = null;      // the user who is logged in
         var currentPage = "dashboard";
+        var selectedCourse = null;
         var selectedAssignment = null;
         var pillReady = false;
-        var users, courses, enrollments, assignments, submissions, decks, quizResults;
+        var users, courses, enrollments, assignments, submissions, decks, quizResults, announcements;
 
         function newId() {
             return new Date().getTime() + Math.floor(Math.random() * 1000);
@@ -170,10 +171,11 @@
             ];
 
             quizResults = [];
+            announcements = [];
         }
 
         function saveData() {
-            var all = { users: users, courses: courses, enrollments: enrollments, assignments: assignments, submissions: submissions, decks: decks, quizResults: quizResults };
+            var all = { users: users, courses: courses, enrollments: enrollments, assignments: assignments, submissions: submissions, decks: decks, quizResults: quizResults, announcements: announcements };
             try {
                 localStorage.setItem("group7", JSON.stringify(all));
             } catch (e) {
@@ -196,6 +198,7 @@
                 submissions = saved.submissions;
                 decks = saved.decks;
                 quizResults = saved.quizResults || [];
+                announcements = saved.announcements || [];
             } else {
                 setupData();
                 saveData();
@@ -471,7 +474,7 @@
             } else if (currentUser.role === "student") {
                 tabs = [["dashboard", "Dashboard"], ["courses", "Courses"], ["grades", "Grades"], ["flashcards", "Flashcards"]];
             } else {
-                tabs = [["dashboard", "Dashboard"], ["users", "Users"]];
+                tabs = [["dashboard", "Dashboard"], ["users", "Users"], ["managecourses", "Courses"], ["announcements", "Announcements"]];
             }
             var html = "<div id='pill'></div>";
             for (var i = 0; i < tabs.length; i++) {
@@ -494,6 +497,8 @@
                 else { showAdminDashboard(); }
             } else if (page === "courses") {
                 if (role === "teacher") { showTeacherCourses(); } else { showStudentCourses(); }
+            } else if (page === "course") {
+                showCourseDetail();
             } else if (page === "assignments") {
                 showTeacherAssignments();
             } else if (page === "assignment") {
@@ -506,6 +511,10 @@
                 showGrades();
             } else if (page === "users") {
                 showUsers();
+            } else if (page === "managecourses") {
+                showManageCourses();
+            } else if (page === "announcements") {
+                showAnnouncements();
             }
 
             // make the page slide in
@@ -526,6 +535,9 @@
 
         function highlightTab(page) {
             var tabName = page;
+            if (page === "course") {
+                if (currentUser.role === "admin") { tabName = "managecourses"; } else { tabName = "courses"; }
+            }
             if (page === "assignment") {
                 // an assignment page belongs to a different tab for each role
                 if (currentUser.role === "teacher") { tabName = "assignments"; } else { tabName = "dashboard"; }
@@ -584,7 +596,7 @@
                     "<span class='badge " + css + "'>" + submitted + "/" + enrolled + " submitted</span></div>";
             }
             if (myAssignments.length === 0) { html += "<p class='small-note'>No assignments yet.</p>"; }
-            html += "</div>";
+            html += "</div>" + announcementsCard();
             document.getElementById("content").innerHTML = html;
         }
 
@@ -620,8 +632,8 @@
                     }
                 }
                 if (names === "") { names = "<span class='small-note'>No students yet</span>"; }
-                html += "<div class='card'><h3>" + safe(myCourses[k].name) + " <span class='badge'>" + safe(myCourses[k].code) + "</span></h3>" +
-                    "<p class='small-note'>" + countEnrolled(myCourses[k].id) + " students</p><p>" + names + "</p></div>";
+                html += "<div class='card clickable' onclick='openCourse(" + myCourses[k].id + ")'><h3>" + safe(myCourses[k].name) + " <span class='badge'>" + safe(myCourses[k].code) + "</span></h3>" +
+                    "<p class='small-note'>" + countEnrolled(myCourses[k].id) + " students · click to open</p><p>" + names + "</p></div>";
             }
             document.getElementById("content").innerHTML = html;
         }
@@ -955,7 +967,7 @@
             html += "</div><div class='card'><h3>Completed</h3>";
             for (var k = 0; k < finished.length; k++) { html += assignmentRow(finished[k], currentUser.id); }
             if (finished.length === 0) { html += "<p class='small-note'>No submissions yet.</p>"; }
-            html += "</div>";
+            html += "</div>" + announcementsCard();
             document.getElementById("content").innerHTML = html;
         }
 
@@ -967,8 +979,8 @@
                 for (var j = 0; j < assignments.length; j++) {
                     if (assignments[j].courseId === myCourses[i].id) { count++; }
                 }
-                html += "<div class='card'><h3>" + safe(myCourses[i].name) + " <span class='badge'>" + safe(myCourses[i].code) + "</span></h3>" +
-                    "<p class='small-note'>Teacher: " + safe(findById(users, myCourses[i].teacherId).name) + " · " + count + " assignments</p></div>";
+                html += "<div class='card clickable' onclick='openCourse(" + myCourses[i].id + ")'><h3>" + safe(myCourses[i].name) + " <span class='badge'>" + safe(myCourses[i].code) + "</span></h3>" +
+                    "<p class='small-note'>Teacher: " + teacherName(myCourses[i]) + " · " + count + " assignments · click to open</p></div>";
             }
             if (myCourses.length === 0) { html += "<p class='small-note'>You are not enrolled in any course yet.</p>"; }
             document.getElementById("content").innerHTML = html;
@@ -1249,21 +1261,148 @@
             showQuestion();
         }
 
-        // ===================== ADMIN PAGES =====================
-        function showAdminDashboard() {
-            var html = "<h2>Admin dashboard</h2><div class='stats'>" + statBox(users.length, "Users") + statBox(courses.length, "Courses") +
-                statBox(assignments.length, "Assignments") + statBox(submissions.length, "Submissions") + "</div>" +
-                "<div class='card'><h3>Security checks</h3><button class='btn-primary' onclick='runTests()'>Run permission tests</button><div id='test-results'></div></div>";
+        // ===================== COURSE DETAIL (all roles) =====================
+        function teacherName(course) {
+            var teacher = findById(users, course.teacherId);
+            if (teacher) { return safe(teacher.name); }
+            return "<em>No teacher assigned</em>";
+        }
+
+        function openCourse(id) {
+            selectedCourse = id;
+            goTo("course");
+        }
+
+        function showCourseDetail() {
+            var course = findById(courses, selectedCourse);
+            var allowed = false;
+            var mine = getMyCourses(currentUser);
+            for (var m = 0; m < mine.length; m++) {
+                if (course && mine[m].id === course.id) { allowed = true; }
+            }
+            if (!allowed) {
+                alert("You cannot open that course.");
+                goTo(currentUser.role === "admin" ? "managecourses" : "courses");
+                return;
+            }
+
+            var role = currentUser.role;
+            var backPage = role === "admin" ? "managecourses" : "courses";
+            var html = "<button class='btn-outline btn-small' onclick=\"goTo('" + backPage + "')\">← Back to courses</button>" +
+                "<h2 style='margin-top:1rem;'>" + safe(course.name) + " <span class='badge'>" + safe(course.code) + "</span></h2>" +
+                "<p class='small-note'>Teacher: " + teacherName(course) + " · " + countEnrolled(course.id) + " enrolled students</p>";
+
+            // students (teacher and admin only)
+            if (role !== "student") {
+                var names = "";
+                for (var e = 0; e < enrollments.length; e++) {
+                    var st = findById(users, enrollments[e].studentId);
+                    if (enrollments[e].courseId === course.id && st) {
+                        names += "<span class='badge'>" + safe(st.name) + "</span> ";
+                    }
+                }
+                if (names === "") { names = "<span class='small-note'>No students yet</span>"; }
+                html += "<div class='card'><h3>Students</h3><p>" + names + "</p></div>";
+            }
+
+            // assignments
+            html += "<div class='card'><h3>Assignments</h3>";
+            var count = 0;
+            for (var i = 0; i < assignments.length; i++) {
+                var a = assignments[i];
+                if (a.courseId !== course.id) { continue; }
+                count++;
+                var right = "";
+                if (role === "student") {
+                    var status = getStatus(a, currentUser.id);
+                    right = "<span class='badge " + status.css + "'>" + status.text + "</span>";
+                } else {
+                    var turnedIn = 0;
+                    for (var x = 0; x < submissions.length; x++) {
+                        if (submissions[x].assignmentId === a.id) { turnedIn++; }
+                    }
+                    right = "<span class='badge'>" + turnedIn + " submitted</span>";
+                }
+                var title = safe(a.title);
+                if (role !== "admin") {
+                    title = "<a onclick='openAssignment(" + a.id + ")'>" + title + "</a>";
+                }
+                html += "<div class='row'><div>" + title + "<br><span class='small-note'>Due " + formatDate(a.deadline) + " · " + a.points + " points</span></div>" + right + "</div>";
+            }
+            if (count === 0) { html += "<p class='small-note'>No assignments yet.</p>"; }
+            html += "</div>";
+
+            // flashcard decks
+            html += "<div class='card'><h3>Flashcard decks</h3>";
+            var deckCount = 0;
+            for (var d = 0; d < decks.length; d++) {
+                if (decks[d].courseId !== course.id) { continue; }
+                deckCount++;
+                var cardTotal = decks[d].cards ? decks[d].cards.length : 0;
+                html += "<div class='row'><span>" + safe(decks[d].title) + "</span><span class='badge'>" + cardTotal + " cards</span></div>";
+            }
+            if (deckCount === 0) { html += "<p class='small-note'>No decks yet.</p>"; }
+            html += "</div>";
+
             document.getElementById("content").innerHTML = html;
         }
 
+        // ===================== ADMIN PAGES =====================
+        function requireAdmin() {
+            if (!currentUser || currentUser.role !== "admin") {
+                alert("Only the administrator can do that.");
+                return false;
+            }
+            return true;
+        }
+
+        function countRole(role) {
+            var count = 0;
+            for (var i = 0; i < users.length; i++) {
+                if (users[i].role === role) { count++; }
+            }
+            return count;
+        }
+
+        function showAdminDashboard() {
+            var html = "<h2>Admin dashboard</h2><div class='stats'>" + statBox(countRole("student"), "Students") + statBox(countRole("teacher"), "Teachers") +
+                statBox(courses.length, "Courses") + statBox(enrollments.length, "Enrollments") +
+                statBox(assignments.length, "Assignments") + statBox(submissions.length, "Submissions") + "</div>";
+
+            // courses that still need a teacher
+            var noTeacher = [];
+            for (var i = 0; i < courses.length; i++) {
+                if (!findById(users, courses[i].teacherId)) { noTeacher.push(courses[i]); }
+            }
+            html += "<div class='card'><h3>Needs attention</h3>";
+            for (var j = 0; j < noTeacher.length; j++) {
+                html += "<div class='row'><span>" + safe(noTeacher[j].code) + " - " + safe(noTeacher[j].name) + "</span><span class='badge badge-overdue'>No teacher</span></div>";
+            }
+            if (noTeacher.length === 0) { html += "<p class='small-note'>Every course has a teacher.</p>"; }
+            html += "</div>";
+
+            html += "<div class='card'><h3>Security checks</h3><button class='btn-primary' onclick='runTests()'>Run permission tests</button><div id='test-results'></div></div>";
+            document.getElementById("content").innerHTML = html;
+        }
+
+        // ---------- USERS ----------
         function showUsers() {
-            var html = "<h2>Users</h2><div class='card table-box'><table><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr>";
+            var html = "<h2>Users</h2>" +
+                "<div class='card'><h3>Add a user</h3><div class='two-col'>" +
+                "<div class='form-group'><label>Full name</label><input type='text' id='nu-name'></div>" +
+                "<div class='form-group'><label>Email</label><input type='email' id='nu-email'></div></div>" +
+                "<div class='two-col'><div class='form-group'><label>Password (4+ characters)</label><input type='password' id='nu-password'></div>" +
+                "<div class='form-group'><label>Role</label><select id='nu-role'><option value='student'>student</option><option value='teacher'>teacher</option><option value='admin'>admin</option></select></div></div>" +
+                "<button class='btn-primary' onclick='adminAddUser()'>Add user</button></div>";
+
+            html += "<div class='card table-box'><div class='form-group'><label>Search users</label>" +
+                "<input type='text' id='user-search' placeholder='Type a name, email or role' oninput='filterUsers()'></div>" +
+                "<table id='user-table'><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr>";
             var roles = ["student", "teacher", "admin"];
             for (var i = 0; i < users.length; i++) {
                 html += "<tr><td>" + safe(users[i].name) + "</td><td>" + safe(users[i].email) + "</td><td>";
                 if (users[i].id === currentUser.id) {
-                    html += users[i].role + "</td><td></td></tr>";
+                    html += users[i].role + "</td><td><span class='small-note'>(you)</span></td></tr>";
                 } else {
                     html += "<select style='width:auto;' onchange='setRole(" + users[i].id + ", this.value)'>";
                     for (var r = 0; r < roles.length; r++) {
@@ -1271,22 +1410,84 @@
                         if (users[i].role === roles[r]) { selected = " selected"; }
                         html += "<option" + selected + ">" + roles[r] + "</option>";
                     }
-                    html += "</select></td><td><button class='btn-primary btn-small btn-danger' onclick='deleteUser(" + users[i].id + ")'>Delete</button></td></tr>";
+                    html += "</select></td><td><button class='btn-outline btn-small' onclick='resetPassword(" + users[i].id + ")'>Reset password</button> " +
+                        "<button class='btn-primary btn-small btn-danger' onclick='deleteUser(" + users[i].id + ")'>Delete</button></td></tr>";
                 }
             }
             document.getElementById("content").innerHTML = html + "</table></div>";
         }
 
+        // hides the rows that do not match the search box
+        function filterUsers() {
+            var text = document.getElementById("user-search").value.toLowerCase();
+            var rows = document.getElementById("user-table").rows;
+            for (var i = 1; i < rows.length; i++) {
+                var rowText = rows[i].cells[0].textContent + " " + rows[i].cells[1].textContent + " ";
+                var select = rows[i].cells[2].getElementsByTagName("select")[0];
+                rowText += select ? select.value : rows[i].cells[2].textContent;
+                rows[i].style.display = rowText.toLowerCase().indexOf(text) === -1 ? "none" : "";
+            }
+        }
+
+        function adminAddUser() {
+            if (!requireAdmin()) { return; }
+            var name = document.getElementById("nu-name").value.trim();
+            var email = document.getElementById("nu-email").value.trim().toLowerCase();
+            var password = document.getElementById("nu-password").value;
+            var role = document.getElementById("nu-role").value;
+
+            if (name === "" || email === "") {
+                alert("Please enter a name and an email.");
+                return;
+            }
+            if (password.length < 4) {
+                alert("Password needs at least 4 characters.");
+                return;
+            }
+            for (var i = 0; i < users.length; i++) {
+                if (users[i].email === email) {
+                    alert("That email is already registered.");
+                    return;
+                }
+            }
+            users.push({ id: newId(), name: name, email: email, password: password, role: role });
+            saveData();
+            refresh();
+        }
+
+        function resetPassword(id) {
+            if (!requireAdmin()) { return; }
+            var user = findById(users, id);
+            if (!user) { return; }
+            var newPassword = prompt("New password for " + user.name + " (at least 4 characters):");
+            if (newPassword && newPassword.length >= 4) {
+                user.password = newPassword;
+                saveData();
+                alert("Password changed.");
+            } else if (newPassword !== null) {
+                alert("Password was not changed (needs 4+ characters).");
+            }
+        }
+
         function setRole(id, role) {
-            if (currentUser.role !== "admin") { return; }
-            findById(users, id).role = role;
+            if (!requireAdmin()) { return; }
+            var user = findById(users, id);
+            if (!user) { return; }
+            user.role = role;
+            // a teacher who is no longer a teacher gives up their courses
+            if (role !== "teacher") {
+                for (var i = 0; i < courses.length; i++) {
+                    if (courses[i].teacherId === id) { courses[i].teacherId = null; }
+                }
+            }
             saveData();
             alert("Role updated!");
             refresh();
         }
 
         function deleteUser(id) {
-            if (currentUser.role !== "admin") { return; }
+            if (!requireAdmin()) { return; }
+            if (id === currentUser.id) { alert("You cannot delete your own account."); return; }
             if (!confirm("Delete this user and their submissions?")) { return; }
             var keepUsers = [];
             for (var i = 0; i < users.length; i++) {
@@ -1303,6 +1504,227 @@
                 if (enrollments[k].studentId !== id) { keepEnr.push(enrollments[k]); }
             }
             enrollments = keepEnr;
+            // courses taught by this user become unassigned
+            for (var c = 0; c < courses.length; c++) {
+                if (courses[c].teacherId === id) { courses[c].teacherId = null; }
+            }
+            saveData();
+            refresh();
+        }
+
+        // ---------- COURSES (admin) ----------
+        function teacherOptions(selectedId) {
+            var html = "<option value=''>-- No teacher --</option>";
+            for (var i = 0; i < users.length; i++) {
+                if (users[i].role === "teacher") {
+                    var selected = "";
+                    if (users[i].id === selectedId) { selected = " selected"; }
+                    html += "<option value='" + users[i].id + "'" + selected + ">" + safe(users[i].name) + "</option>";
+                }
+            }
+            return html;
+        }
+
+        function showManageCourses() {
+            var html = "<h2>Manage courses</h2><div class='card'><h3>New course</h3><div class='two-col'>" +
+                "<div class='form-group'><label>Course code</label><input type='text' id='ac-code' placeholder='e.g. ITE 048'></div>" +
+                "<div class='form-group'><label>Course name</label><input type='text' id='ac-name' placeholder='e.g. Discrete Structures'></div></div>" +
+                "<div class='form-group'><label>Teacher</label><select id='ac-teacher'>" + teacherOptions(null) + "</select></div>" +
+                "<button class='btn-primary' onclick='adminAddCourse()'>Create course</button></div>";
+
+            for (var i = 0; i < courses.length; i++) {
+                var c = courses[i];
+
+                var names = "";
+                var studentOptions = "";
+                for (var s = 0; s < users.length; s++) {
+                    if (users[s].role !== "student") { continue; }
+                    if (isEnrolled(c.id, users[s].id)) {
+                        names += "<span class='badge'>" + safe(users[s].name) + " <a onclick='adminUnenroll(" + c.id + ", " + users[s].id + ")' title='Remove from course'>✕</a></span> ";
+                    } else {
+                        studentOptions += "<option value='" + users[s].id + "'>" + safe(users[s].name) + "</option>";
+                    }
+                }
+                if (names === "") { names = "<span class='small-note'>No students yet</span>"; }
+
+                html += "<div class='card'><h3>" + safe(c.name) + " <span class='badge'>" + safe(c.code) + "</span></h3>" +
+                    "<div class='two-col'><div class='form-group'><label>Course code</label><input type='text' id='ec-code-" + c.id + "' value='" + safe(c.code) + "'></div>" +
+                    "<div class='form-group'><label>Course name</label><input type='text' id='ec-name-" + c.id + "' value='" + safe(c.name) + "'></div></div>" +
+                    "<div class='form-group'><label>Teacher</label><select id='ec-teacher-" + c.id + "'>" + teacherOptions(c.teacherId) + "</select></div>" +
+                    "<button class='btn-outline btn-small' onclick='openCourse(" + c.id + ")'>View details</button> " +
+                    "<button class='btn-primary btn-small' onclick='adminSaveCourse(" + c.id + ")'>Save changes</button> " +
+                    "<button class='btn-primary btn-small btn-danger' onclick='adminDeleteCourse(" + c.id + ")'>Delete course</button>" +
+                    "<p class='small-note' style='margin-top:1rem;'>" + countEnrolled(c.id) + " enrolled students</p><p>" + names + "</p>";
+                if (studentOptions !== "") {
+                    html += "<div class='form-group'><label>Enroll a student</label><select id='en-student-" + c.id + "'>" + studentOptions + "</select></div>" +
+                        "<button class='btn-outline btn-small' onclick='adminEnroll(" + c.id + ")'>Enroll</button>";
+                }
+                html += "</div>";
+            }
+            if (courses.length === 0) { html += "<p class='small-note'>No courses yet.</p>"; }
+            document.getElementById("content").innerHTML = html;
+        }
+
+        function courseCodeTaken(code, exceptId) {
+            for (var i = 0; i < courses.length; i++) {
+                if (courses[i].id !== exceptId && courses[i].code.toLowerCase() === code.toLowerCase()) { return true; }
+            }
+            return false;
+        }
+
+        function adminAddCourse() {
+            if (!requireAdmin()) { return; }
+            var code = document.getElementById("ac-code").value.trim();
+            var name = document.getElementById("ac-name").value.trim();
+            var teacher = parseInt(document.getElementById("ac-teacher").value);
+            if (code === "" || name === "") {
+                alert("Please enter the course code and name.");
+                return;
+            }
+            if (courseCodeTaken(code, null)) {
+                alert("That course code already exists.");
+                return;
+            }
+            courses.push({ id: newId(), code: code, name: name, teacherId: isNaN(teacher) ? null : teacher });
+            saveData();
+            refresh();
+        }
+
+        function adminSaveCourse(id) {
+            if (!requireAdmin()) { return; }
+            var course = findById(courses, id);
+            var code = document.getElementById("ec-code-" + id).value.trim();
+            var name = document.getElementById("ec-name-" + id).value.trim();
+            var teacher = parseInt(document.getElementById("ec-teacher-" + id).value);
+            if (!course) { return; }
+            if (code === "" || name === "") {
+                alert("Please enter the course code and name.");
+                return;
+            }
+            if (courseCodeTaken(code, id)) {
+                alert("That course code already exists.");
+                return;
+            }
+            course.code = code;
+            course.name = name;
+            course.teacherId = isNaN(teacher) ? null : teacher;
+            saveData();
+            alert("Course updated!");
+            refresh();
+        }
+
+        function adminDeleteCourse(id) {
+            if (!requireAdmin()) { return; }
+            if (!confirm("Delete this course with its assignments, submissions, enrollments and flashcard decks?")) { return; }
+
+            // remove the submissions of this course's assignments first
+            var goneAsg = [];
+            var keepAsg = [];
+            for (var i = 0; i < assignments.length; i++) {
+                if (assignments[i].courseId === id) { goneAsg.push(assignments[i].id); } else { keepAsg.push(assignments[i]); }
+            }
+            assignments = keepAsg;
+
+            var keepSubs = [];
+            for (var j = 0; j < submissions.length; j++) {
+                if (goneAsg.indexOf(submissions[j].assignmentId) === -1) { keepSubs.push(submissions[j]); }
+            }
+            submissions = keepSubs;
+
+            var keepEnr = [];
+            for (var k = 0; k < enrollments.length; k++) {
+                if (enrollments[k].courseId !== id) { keepEnr.push(enrollments[k]); }
+            }
+            enrollments = keepEnr;
+
+            var keepDecks = [];
+            for (var d = 0; d < decks.length; d++) {
+                if (decks[d].courseId !== id) { keepDecks.push(decks[d]); }
+            }
+            decks = keepDecks;
+
+            var keepCourses = [];
+            for (var c = 0; c < courses.length; c++) {
+                if (courses[c].id !== id) { keepCourses.push(courses[c]); }
+            }
+            courses = keepCourses;
+
+            saveData();
+            refresh();
+        }
+
+        function adminEnroll(courseId) {
+            if (!requireAdmin()) { return; }
+            var studentId = parseInt(document.getElementById("en-student-" + courseId).value);
+            if (isNaN(studentId) || isEnrolled(courseId, studentId)) { return; }
+            enrollments.push({ courseId: courseId, studentId: studentId });
+            saveData();
+            refresh();
+        }
+
+        function adminUnenroll(courseId, studentId) {
+            if (!requireAdmin()) { return; }
+            if (!confirm("Remove this student from the course?")) { return; }
+            var keepEnr = [];
+            for (var i = 0; i < enrollments.length; i++) {
+                if (!(enrollments[i].courseId === courseId && enrollments[i].studentId === studentId)) { keepEnr.push(enrollments[i]); }
+            }
+            enrollments = keepEnr;
+            saveData();
+            refresh();
+        }
+
+        // ---------- ANNOUNCEMENTS ----------
+        // card shown on the teacher and student dashboards (latest 3)
+        function announcementsCard() {
+            var html = "<div class='card'><h3>Announcements</h3>";
+            var shown = 0;
+            for (var i = announcements.length - 1; i >= 0 && shown < 3; i--) {
+                html += "<div class='row'><div><strong>" + safe(announcements[i].title) + "</strong><br>" +
+                    "<span style='white-space:pre-wrap;'>" + safe(announcements[i].message) + "</span><br>" +
+                    "<span class='small-note'>" + formatDate(announcements[i].date) + "</span></div></div>";
+                shown++;
+            }
+            if (shown === 0) { html += "<p class='small-note'>No announcements.</p>"; }
+            return html + "</div>";
+        }
+
+        function showAnnouncements() {
+            var html = "<h2>Announcements</h2><div class='card'><h3>Post an announcement</h3>" +
+                "<div class='form-group'><label>Title</label><input type='text' id='an-title'></div>" +
+                "<div class='form-group'><label>Message</label><textarea rows='3' id='an-message'></textarea></div>" +
+                "<button class='btn-primary' onclick='postAnnouncement()'>Post</button></div>" +
+                "<div class='card'><h3>Posted announcements</h3>";
+            for (var i = announcements.length - 1; i >= 0; i--) {
+                html += "<div class='row'><div><strong>" + safe(announcements[i].title) + "</strong><br>" +
+                    "<span style='white-space:pre-wrap;'>" + safe(announcements[i].message) + "</span><br>" +
+                    "<span class='small-note'>" + formatDate(announcements[i].date) + "</span></div>" +
+                    "<button class='btn-primary btn-small btn-danger' onclick='deleteAnnouncement(" + announcements[i].id + ")'>Delete</button></div>";
+            }
+            if (announcements.length === 0) { html += "<p class='small-note'>None yet.</p>"; }
+            document.getElementById("content").innerHTML = html + "</div>";
+        }
+
+        function postAnnouncement() {
+            if (!requireAdmin()) { return; }
+            var title = document.getElementById("an-title").value.trim();
+            var message = document.getElementById("an-message").value.trim();
+            if (title === "" || message === "") {
+                alert("Please enter a title and a message.");
+                return;
+            }
+            announcements.push({ id: newId(), title: title, message: message, date: new Date().getTime() });
+            saveData();
+            refresh();
+        }
+
+        function deleteAnnouncement(id) {
+            if (!requireAdmin()) { return; }
+            var keep = [];
+            for (var i = 0; i < announcements.length; i++) {
+                if (announcements[i].id !== id) { keep.push(announcements[i]); }
+            }
+            announcements = keep;
             saveData();
             refresh();
         }
